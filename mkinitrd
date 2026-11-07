@@ -1,0 +1,258 @@
+#!/bin/sh
+# Copyright: Isaac David Orozco Delgado (c) 2026
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+export RamDiskDir="$(mktemp -dt mkinitrd.XXXXXX)"
+export KrnlVer="$(uname -r)"
+export ModsDir="/system/lib/modules"
+export CPIO="cpio"
+export Modules="vfat"
+export ROOT=
+export Wah=
+
+for cmd in $@; do
+	case $cmd in
+		"-k="*)
+			KrnlVer=${cmd#-k=}
+		;;
+		"-m="*)
+			ModsDir=${cmd#-m=}
+		;;
+		"-f"*)
+			if [ "${cmd#-f=/}" != "$cmd" ]; then
+				export RamDiskFile=${cmd#-f=}
+			else
+				export RamDiskFile="$PWD/${cmd#-f=}"
+			fi
+		;;
+		"-r="*)
+			if [ "${cmd#-r=/}" != "$cmd" ]; then
+				ROOT=${cmd#-r=}
+			else
+				ROOT="$PWD/${cmd#-r=}"
+			fi
+		;;
+		"--cpio="*)
+			CPIO=${cmd#--cpio=}
+		;;
+	esac
+done
+
+ModsDir="$ModsDir/$KrnlVer"
+[ ! -n "$RamDiskFile" ] && export RamDiskFile="/system/boot/initrd-$KrnlVer.cpio"
+
+if [ ! -d "$ModsDir" ]; then
+	echo "Fail finding modules for kernel $KrnlVer..."
+	echo "Modules directory: $ModsDir"
+	exit 2
+fi
+
+rm -rf $RamDiskDir $RamDiskFile
+
+echo "Kernel version: $KrnlVer"
+
+[ -n "$(modinfo --help | grep system/)" ] || Wah=system
+
+printf "Finding modulos dependencies... "
+for mod in $Modules; do
+	IFS=,
+	for dep in $(modinfo -b $ROOT/$Wah -k $KrnlVer -F depends $mod); do
+		if [ ! -n "$(echo $Modules | grep -ow $dep)" ]; then
+			Modules="$Modules $dep"
+		fi
+	done
+done
+
+IFS=" "
+for mod in $Modules; do
+	modFile="$(modinfo -b $ROOT/$Wah -k $KrnlVer -n $mod)"
+
+	[ "$modFile" = "(builtin)" ] || install -D $modFile $RamDiskDir/system/lib/modules/$KrnlVer/${modFile#*$ModsDir/}
+done
+
+echo done
+
+printf "Building modules index... "
+for i in builtin builtin.modinfo order; do
+	cp $ModsDir/modules.$i $RamDiskDir/system/lib/modules/$KrnlVer
+done
+
+depmod -b $RamDiskDir -m /system/lib/modules $KrnlVer
+
+echo done
+
+printf "Building init script... "
+
+cat << EOF | install /dev/stdin $RamDiskDir/init
+#!/system/bin/sh
+
+[ -d "/dev" ] || mkdir -p /dev
+mount -t devtmpfs dev /dev
+
+[ -d "/proc" ] || mkdir -p /proc
+mount -t proc proc /proc
+
+[ -d "/sys" ] || mkdir -p /sys
+mount -t sysfs sys /sys
+
+[ -d "/run" ] || mkdir -p /run
+
+udevd &
+udevadm trigger --action=add
+udevadm settle
+
+getDev(){
+	case \$1 in
+		"LABEL="*)
+			echo "/dev/disk/by-label/\${1#LABEL=}"
+		;;
+		"UUID="*)
+			echo "/dev/disk/by-uuid/\${1#UUID=}"
+		;;
+		*)
+			echo "\$1"
+		;;
+	esac
+}
+
+export BOOT
+export SYST
+export ROOT
+export QUIET=0
+
+for cmd in \$(cat /proc/cmdline); do
+	case \$cmd in
+		"root="*)
+			ROOT=\$(getDev \${cmd#root=})
+		;;
+		"quiet")
+			QUIET=1
+		;;
+	esac
+done
+
+print(){
+	if [ "\$QUIET" -eq 0 ]; then
+		echo "\$@"
+	else
+		echo "initrd: \$@" > /dev/kmsg
+	fi
+}
+
+MOUNT(){
+	FS=\$(blkid \$1 | grep -o 'TYPE="[^"]*"' | cut -d '"' -f2)
+	[ -n "\$FS" ] && modprobe \$FS
+	[ -d "\$2" ] || mkdir -p \$2
+	while [ ! -b "\$1" ] && [ ! -f "\$1" ] && [ ! -L "\$1" ]; do
+		sleep 1
+		print "Waiting for \$1"
+		FS=\$(blkid \$1 | grep -o 'TYPE="[^"]*"' | cut -d '"' -f2)
+		[ -n "\$FS" ] && modprobe \$FS
+	done
+	mount \$1 \$2
+}
+
+if [ -n "\$boot" ]; then
+	BOOT=\$(getDev \$boot)
+	unset boot
+	print "boot: \$BOOT"
+	MOUNT \$BOOT /system/boot
+	losetup -Pf \$BOOT
+	sleep 1
+fi
+
+if [ -n "\$ROOT" ]; then
+	print "root: \$ROOT"
+	MOUNT \$ROOT /root
+fi
+
+if [ -n "\$system" ]; then
+	[ -n "\$ROOT" ] || echo "Warning: root don't especified, your data will be delete"
+	SYST=\$(getDev \$system)
+	unset system
+	print "system: \$SYST"
+	MOUNT \$SYST /root/system
+fi
+
+if [ -f "/root/system/sbin/init" ] && [ -x "/root/system/sbin/init" ]; then
+	killall udevd
+
+	mount --move /system/boot /root/system/boot
+	umount /proc
+	umount /sys
+
+	print "Boot successful"
+	[ "\$QUIET" -eq 1 ] && clear
+	exec switch_root /root /system/sbin/init
+fi
+
+echo "Boot fail, take this shell"
+exec sh
+EOF
+echo done
+
+cat << EOF | install -Dm644 /dev/stdin $RamDiskDir/etc/group
+root:x:0:root
+tty:x:1:
+audio:x:2:
+video:x:3:
+input:x:4:
+dialout:x:5:
+disk:x:6:
+cdrom:x:7:
+tape:x:8:
+kvm:x:9:
+lp:x:10:
+sgx:x:11:
+kmem:x:12:
+EOF
+
+printf "Installing binaries... "
+cat << EOF | install -D /dev/stdin $RamDiskDir/system/sbin/poweroff
+#!/system/bin/sh
+exec busybox \$0 \$@ -f
+EOF
+
+install -Dt $RamDiskDir/system/bin \
+	$ROOT/system/bin/busybox \
+	$ROOT/system/bin/udevadm \
+	$ROOT/system/bin/kmod
+
+install -D $ROOT/system/sbin/udevd  -t $RamDiskDir/system/sbin
+
+install -Dt $RamDiskDir/system/lib \
+	$ROOT/system/lib/libblkid.so.1 \
+	$ROOT/system/lib/libkmod.so.2
+
+cp -ra $ROOT/system/lib/udev $RamDiskDir/system/lib
+
+install -D $ROOT/system/lib/ld-musl-x86_64.so.1 -t $RamDiskDir/system/lib/musl-1.2.5-x86_64
+
+ln -s poweroff $RamDiskDir/system/sbin/reboot
+ln -s ../bin/kmod $RamDiskDir/system/sbin/modprobe
+ln -s ../bin/busybox $RamDiskDir/system/sbin/losetup
+ln -s ../bin/busybox $RamDiskDir/system/sbin/blkid
+ln -s ../bin/busybox $RamDiskDir/system/sbin/umount
+ln -s ../bin/busybox $RamDiskDir/system/sbin/switch_root
+
+ln -s kmod $RamDiskDir/system/bin/lsmod
+ln -s busybox $RamDiskDir/system/bin/sh
+ln -s busybox $RamDiskDir/system/bin/mount
+ln -s busybox $RamDiskDir/system/bin/mkdir
+ln -s busybox $RamDiskDir/system/bin/clear
+ln -s busybox $RamDiskDir/system/bin/ls
+ln -s busybox $RamDiskDir/system/bin/ln
+ln -s busybox $RamDiskDir/system/bin/cat
+ln -s busybox $RamDiskDir/system/bin/fdisk
+ln -s busybox $RamDiskDir/system/bin/grep
+ln -s busybox $RamDiskDir/system/bin/cut
+ln -s busybox $RamDiskDir/system/bin/killall
+ln -s busybox $RamDiskDir/system/bin/readlink
+echo done
+
+echo "Building $RamDiskFile..."
+cd $RamDiskDir
+find | $CPIO -H newc -o > $RamDiskFile
+cd ..
+rm -rf $RamDiskDir
