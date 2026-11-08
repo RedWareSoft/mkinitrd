@@ -229,7 +229,7 @@ install -Dt $RamDiskDir/system/lib \
 	$ROOT/system/lib/libblkid.so.1 \
 	$ROOT/system/lib/libkmod.so.2
 
-cp -ra $ROOT/system/lib/udev $RamDiskDir/system/lib | grep -v "preserve ownership"
+cp -ra $ROOT/system/lib/udev $RamDiskDir/system/lib 2>&1 | grep -v "preserve ownership"
 
 install -D $ROOT/system/lib/ld-musl-$Arch.so.1 -t $RamDiskDir/system/lib/musl-1.2.5-$Arch
 
