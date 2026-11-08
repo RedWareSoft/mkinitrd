@@ -5,6 +5,7 @@
 
 export RamDiskDir="$(mktemp -dt mkinitrd.XXXXXX)"
 export KrnlVer="$(uname -r)"
+export Arch="$(uname -m)"
 export ModsDir="/system/lib/modules"
 export CPIO="cpio"
 export Modules="vfat"
@@ -18,6 +19,9 @@ for cmd in $@; do
 		;;
 		"-m="*)
 			ModsDir=${cmd#-m=}
+		;;
+		"-A="*)
+			Arch=${cmd#-A=}
 		;;
 		"-f"*)
 			if [ "${cmd#-f=/}" != "$cmd" ]; then
@@ -227,7 +231,7 @@ install -Dt $RamDiskDir/system/lib \
 
 cp -ra $ROOT/system/lib/udev $RamDiskDir/system/lib
 
-install -D $ROOT/system/lib/ld-musl-x86_64.so.1 -t $RamDiskDir/system/lib/musl-1.2.5-x86_64
+install -D $ROOT/system/lib/ld-musl-$Arch.so.1 -t $RamDiskDir/system/lib/musl-1.2.5-$Arch
 
 ln -s poweroff $RamDiskDir/system/sbin/reboot
 ln -s ../bin/kmod $RamDiskDir/system/sbin/modprobe
