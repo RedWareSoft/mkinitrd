@@ -233,6 +233,8 @@ cp -ra $ROOT/system/lib/udev $RamDiskDir/system/lib
 
 install -D $ROOT/system/lib/ld-musl-$Arch.so.1 -t $RamDiskDir/system/lib/musl-1.2.5-$Arch
 
+ln -s musl-1.2.5-$Arch/ld-musl-$Arch.so.1 $RamDiskDir/system/lib
+
 ln -s poweroff $RamDiskDir/system/sbin/reboot
 ln -s ../bin/kmod $RamDiskDir/system/sbin/modprobe
 ln -s ../bin/busybox $RamDiskDir/system/sbin/losetup
