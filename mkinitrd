@@ -229,7 +229,7 @@ install -Dt $RamDiskDir/system/lib \
 	$ROOT/system/lib/libblkid.so.1 \
 	$ROOT/system/lib/libkmod.so.2
 
-cp -ra $ROOT/system/lib/udev $RamDiskDir/system/lib
+cp -ra $ROOT/system/lib/udev $RamDiskDir/system/lib | grep -v "preserve ownership"
 
 install -D $ROOT/system/lib/ld-musl-$Arch.so.1 -t $RamDiskDir/system/lib/musl-1.2.5-$Arch
 
@@ -259,6 +259,6 @@ echo done
 
 echo "Building $RamDiskFile..."
 cd $RamDiskDir
-find | $CPIO -H newc -o > $RamDiskFile
+find | $CPIO -R root:root -H newc -o > $RamDiskFile
 cd ..
 rm -rf $RamDiskDir
